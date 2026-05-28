@@ -30,35 +30,32 @@ usersRouter.post("/register", async (req: Request, res: Response, next: NextFunc
 
     const { walletAddress, email, alias } = parsed.data;
 
-    // Execute user registration within transaction
-    const savedUser = await withTransaction(async (queryRunner) => {
-      const userRepository = queryRunner.manager.getRepository(User);
+    // Get database connection
+    const dataSource = getDataSource();
+    const userRepository = dataSource.getRepository(User);
 
-      // Check if user already exists
-      const existingUser = await userRepository.findOne({
-        where: { walletAddress }
-      });
+    // Check if user already exists
+    const existingUser = await userRepository.findOne({
+      where: { walletAddress }
+    });
 
-      if (existingUser) {
-        throw new AppError(
-          ErrorType.VALIDATION,
-          ErrorCode.VALIDATION_ERROR,
-          "User with this wallet address already exists.",
-          { walletAddress }
-        );
-      }
+    if (existingUser) {
+      throw new AppError(
+        ErrorType.VALIDATION,
+        ErrorCode.VALIDATION_ERROR,
+        "User with this wallet address already exists.",
+        undefined,
+        { walletAddress }
+      );
+    }
 
-      // Create new user
-      const newUser = userRepository.create({
-        walletAddress,
-        email,
-        alias,
-        role: "user",
-        isActive: true
-      });
-
-      // Save to database within transaction
-      return await userRepository.save(newUser);
+    // Create new user
+    const newUser = userRepository.create({
+      walletAddress,
+      email,
+      alias,
+      role: "user",
+      isActive: true
     });
 
     logger.info("User registered successfully", {
