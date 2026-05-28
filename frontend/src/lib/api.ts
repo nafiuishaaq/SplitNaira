@@ -1,346 +1,155 @@
+export {
+  ApiClient,
+  type CreateSplitPayload,
+  type ProjectHistoryItem,
+  type ProjectHistoryResponse,
+  type ClaimableInfo,
+  type TokenAllowlistState,
+  type AdminStatusState,
+  type UnallocatedBalanceState,
+  type WithdrawUnallocatedPayload,
+  type WithdrawUnallocatedResponse,
+  type ListProjectsParams,
+} from "./api-client";
+
+import { ApiClient, type ListProjectsParams } from "./api-client";
 import type { SplitProject, Collaborator } from "./stellar";
-import { getEnv } from "./env";
 
-const API_BASE_URL = getEnv().NEXT_PUBLIC_API_BASE_URL;
+const client = new ApiClient();
 
-export interface CreateSplitPayload {
+export async function buildCreateSplitXdr(payload: {
   owner: string;
   projectId: string;
   title: string;
   projectType: string;
   token: string;
   collaborators: Array<Collaborator>;
-}
-
-export interface ProjectHistoryItem {
-  id: string;
-  type: "round" | "payment";
-  round: number;
-  amount: string | number;
-  recipient: string;
-  ledgerCloseTime: number;
-  txHash: string;
-}
-
-export interface ProjectHistoryResponse {
-  items: ProjectHistoryItem[];
-  nextCursor: string | null;
-}
-
-export interface ClaimableInfo {
-  claimed: string | number;
-  claimable?: string | number;
-  distributionRound?: number;
-}
-
-export interface TokenAllowlistState {
-  admin: string | null;
-  allowedTokenCount: number;
-  tokens: string[];
-  start: number;
-  limit: number;
-}
-
-export interface AdminStatusState {
-  admin: string | null;
-  isPaused: boolean;
-}
-
-export interface UnallocatedBalanceState {
-  token: string;
-  unallocated: string;
-}
-
-interface BuildSplitResponse {
-  xdr: string;
-  metadata: {
-    networkPassphrase: string;
-    contractId: string;
-    operation?: string;
-  };
-}
-
-export interface ListProjectsParams {
-  start?: number;
-  limit?: number;
-}
-
-export interface WithdrawUnallocatedPayload {
-  admin: string;
-  token: string;
-  to: string;
-  amount: number;
-}
-
-export interface WithdrawUnallocatedResponse extends BuildSplitResponse {
-  metadata: BuildSplitResponse["metadata"] & {
-    auditContext: {
-      token: string;
-      destination: string;
-      amount: number;
-      initiatedAt: string;
-    };
-  };
-}
-
-function toErrorMessage(status: number, payload: unknown, fallback: string) {
-  if (payload && typeof payload === "object" && "message" in payload) {
-    const message = (payload as { message?: unknown }).message;
-    if (typeof message === "string" && message.trim()) {
-      return message;
-    }
-  }
-  return `${fallback} (status ${status})`;
-}
-
-async function requestJson<T>(
-  path: string,
-  fallbackMessage: string,
-  init?: RequestInit
-): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
-  const body = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    throw new Error(toErrorMessage(response.status, body, fallbackMessage));
-  }
-  return body as T;
-}
-
-export async function buildCreateSplitXdr(
-  payload: CreateSplitPayload
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>("/splits", "Failed to build split transaction", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+}): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildCreateSplitXdr(payload);
 }
 
 export async function buildDistributeXdr(
   projectId: string,
-  sourceAddress: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    `/splits/${encodeURIComponent(projectId)}/distribute`,
-    "Failed to build distribution transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceAddress })
-    }
-  );
+  sourceAddress: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildDistributeXdr(projectId, sourceAddress);
 }
 
 export async function buildLockProjectXdr(
   projectId: string,
-  owner: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    `/splits/${encodeURIComponent(projectId)}/lock`,
-    "Failed to build lock transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ owner })
-    }
-  );
+  owner: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildLockProjectXdr(projectId, owner);
 }
 
 export async function buildDepositXdr(
   projectId: string,
   from: string,
-  amount: number
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    `/splits/${encodeURIComponent(projectId)}/deposit`,
-    "Failed to build deposit transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ from, amount })
-    }
-  );
+  amount: number,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildDepositXdr(projectId, from, amount);
 }
 
 export async function buildUpdateMetadataXdr(
   projectId: string,
   owner: string,
   title: string,
-  projectType: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    `/splits/${encodeURIComponent(projectId)}/metadata`,
-    "Failed to build metadata update transaction",
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ owner, title, projectType })
-    }
-  );
+  projectType: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildUpdateMetadataXdr(projectId, owner, title, projectType);
 }
 
 export async function buildUpdateCollaboratorsXdr(
   projectId: string,
   owner: string,
-  collaborators: Array<Collaborator>
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    `/splits/${encodeURIComponent(projectId)}/collaborators`,
-    "Failed to build collaborators update transaction",
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ owner, collaborators })
-    }
-  );
+  collaborators: Array<Collaborator>,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildUpdateCollaboratorsXdr(projectId, owner, collaborators);
 }
 
 export async function buildAllowTokenXdr(
   admin: string,
-  token: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    "/splits/admin/allow-token",
-    "Failed to build allow token transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ admin, token })
-    }
-  );
+  token: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildAllowTokenXdr(admin, token);
 }
 
 export async function buildDisallowTokenXdr(
   admin: string,
-  token: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    "/splits/admin/disallow-token",
-    "Failed to build disallow token transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ admin, token })
-    }
-  );
+  token: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildDisallowTokenXdr(admin, token);
 }
 
 export async function buildPauseDistributionsXdr(
-  admin: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    "/splits/admin/pause-distributions",
-    "Failed to build pause transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ admin })
-    }
-  );
+  admin: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildPauseDistributionsXdr(admin);
 }
 
 export async function buildUnpauseDistributionsXdr(
-  admin: string
-): Promise<BuildSplitResponse> {
-  return requestJson<BuildSplitResponse>(
-    "/splits/admin/unpause-distributions",
-    "Failed to build unpause transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ admin })
-    }
-  );
+  admin: string,
+): Promise<{ xdr: string; metadata: { networkPassphrase: string; contractId: string; operation?: string } }> {
+  return client.buildUnpauseDistributionsXdr(admin);
 }
 
-export async function buildWithdrawUnallocatedXdr(
-  payload: WithdrawUnallocatedPayload
-): Promise<WithdrawUnallocatedResponse> {
-  return requestJson<WithdrawUnallocatedResponse>(
-    "/splits/admin/withdraw-unallocated",
-    "Failed to build withdraw unallocated transaction",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }
-  );
+export async function buildWithdrawUnallocatedXdr(payload: {
+  admin: string;
+  token: string;
+  to: string;
+  amount: number;
+}): Promise<{
+  xdr: string;
+  metadata: { networkPassphrase: string; contractId: string; operation?: string; auditContext: { token: string; destination: string; amount: number; initiatedAt: string } };
+}> {
+  return client.buildWithdrawUnallocatedXdr(payload);
 }
 
 export async function getSplit(projectId: string): Promise<SplitProject> {
-  return requestJson<SplitProject>(
-    `/splits/${encodeURIComponent(projectId)}`,
-    "Failed to fetch split project"
-  );
+  return client.getSplit(projectId);
 }
 
 export async function getAllSplits(): Promise<SplitProject[]> {
-  return requestJson<SplitProject[]>("/splits", "Failed to fetch projects");
+  return client.getAllSplits();
 }
 
 export async function listProjects(params?: ListProjectsParams): Promise<SplitProject[]> {
-  const query = new URLSearchParams();
-  if (params?.start !== undefined) query.set("start", String(params.start));
-  if (params?.limit !== undefined) query.set("limit", String(params.limit));
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return requestJson<SplitProject[]>(`/splits${suffix}`, "Failed to fetch projects");
+  return client.listProjects(params);
 }
 
 export async function getClaimable(
   projectId: string,
-  address: string
-): Promise<ClaimableInfo> {
-  return requestJson<ClaimableInfo>(
-    `/splits/${encodeURIComponent(projectId)}/claimable/${encodeURIComponent(address)}`,
-    "Failed to fetch claimable info"
-  );
+  address: string,
+): Promise<{ claimed: string | number; claimable?: string | number; distributionRound?: number }> {
+  return client.getClaimable(projectId, address);
 }
 
 export async function getProjectHistory(
   projectId: string,
-  cursor?: string
-): Promise<ProjectHistoryResponse> {
-  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-  return requestJson<ProjectHistoryResponse>(
-    `/splits/${encodeURIComponent(projectId)}/history${query}`,
-    "Failed to fetch project history"
-  );
+  cursor?: string,
+): Promise<{ items: Array<{ id: string; type: "round" | "payment"; round: number; amount: string | number; recipient: string; txHash: string; ledgerCloseTime: number }>; nextCursor: string | null }> {
+  return client.getProjectHistory(projectId, cursor);
 }
 
 export async function getTokenAllowlist(
-  start = 0,
-  limit = 100
-): Promise<TokenAllowlistState> {
-  return requestJson<TokenAllowlistState>(
-    `/splits/admin/allowlist?start=${start}&limit=${limit}`,
-    "Failed to fetch token allowlist"
-  );
+  start?: number,
+  limit?: number,
+): Promise<{ admin: string | null; allowedTokenCount: number; tokens: string[]; start: number; limit: number }> {
+  return client.getTokenAllowlist(start, limit);
 }
 
-export async function getAdminStatus(): Promise<AdminStatusState> {
-  return requestJson<AdminStatusState>(
-    "/splits/admin/status",
-    "Failed to fetch admin status"
-  );
+export async function getAdminStatus(): Promise<{ admin: string | null; isPaused: boolean }> {
+  return client.getAdminStatus();
 }
 
 export async function isTokenAllowed(token: string): Promise<{ token: string; isAllowed: boolean }> {
-  return requestJson<{ token: string; isAllowed: boolean }>(
-    `/splits/admin/is-token-allowed?token=${encodeURIComponent(token)}`,
-    "Failed to check token allowlist status"
-  );
+  return client.isTokenAllowed(token);
 }
 
 export async function getAdminTokenCount(): Promise<{ count: number }> {
-  return requestJson<{ count: number }>(
-    "/splits/admin/token-count",
-    "Failed to fetch allowed token count"
-  );
+  return client.getAdminTokenCount();
 }
 
-export async function getUnallocatedBalance(token: string): Promise<UnallocatedBalanceState> {
-  return requestJson<UnallocatedBalanceState>(
-    `/splits/admin/unallocated?token=${encodeURIComponent(token)}`,
-    "Failed to fetch unallocated balance"
-  );
+export async function getUnallocatedBalance(token: string): Promise<{ token: string; unallocated: string }> {
+  return client.getUnallocatedBalance(token);
 }

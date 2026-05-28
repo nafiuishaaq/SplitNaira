@@ -21,9 +21,8 @@ describe("Frontend API Pagination", () => {
     const result = await getProjectHistory("project-id");
 
     expect(mockFetch).toHaveBeenCalledWith(
-    expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/splits/project-id/history"),
-      undefined
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
     expect(result).toEqual(mockResponse);
     expect(result).toHaveProperty("items");
