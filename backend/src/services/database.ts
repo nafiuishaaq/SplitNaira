@@ -40,8 +40,8 @@ export function createDataSource(): DataSource {
     },
     ssl: needsSsl
       ? {
-          rejectUnauthorized: false
-        }
+        rejectUnauthorized: false
+      }
       : false
   });
 }
@@ -79,6 +79,33 @@ export function getDataSource(): DataSource {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }
   return AppDataSource;
+}
+
+/**
+ * Execute a callback function within a database transaction.
+ * Automatically rolls back on error.
+ * @param callback - Async function to execute within transaction
+ * @returns Promise with the callback result
+ */
+export async function withTransaction<T>(
+  callback: (queryRunner: any) => Promise<T>
+): Promise<T> {
+  const dataSource = getDataSource();
+  const queryRunner = dataSource.createQueryRunner();
+
+  await queryRunner.connect();
+  await queryRunner.startTransaction();
+
+  try {
+    const result = await callback(queryRunner);
+    await queryRunner.commitTransaction();
+    return result;
+  } catch (error) {
+    await queryRunner.rollbackTransaction();
+    throw error;
+  } finally {
+    await queryRunner.release();
+  }
 }
 
 export async function closeDatabase(): Promise<void> {
