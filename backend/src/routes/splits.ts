@@ -1,13 +1,10 @@
 import { Request, Response, NextFunction, Router } from "express";
-import { z } from "zod";
-import { CollaboratorSchema } from "../generated/contract-types.js";
 import {
   Address,
   BASE_FEE,
   Contract,
   TransactionBuilder,
   nativeToScVal,
-  rpc,
   scValToNative,
   xdr
 } from "@stellar/stellar-sdk";
@@ -17,33 +14,115 @@ import {
   getStellarRpcServer,
   RequestValidationError,
   executeWithRetry,
-  getCached,
-  setCached,
   invalidateCache,
   invalidateCacheByPrefix,
   getCacheStats,
-  READ_CACHE_TTL_MS,
-  type UnsignedTxResponse
+  READ_CACHE_TTL_MS
 } from "../services/stellar.js";
 
-import { 
-  AppError, 
-  ErrorCode, 
-  ErrorType, 
-  translateSorobanError 
+import {
+  AppError,
+  ErrorCode,
+  ErrorType,
+  translateSorobanError
 } from "../lib/errors.js";
 
-function serializeBigInts(obj: unknown): unknown {
-  if (obj === null || obj === undefined) return obj;
-  if (typeof obj === "bigint") return obj.toString();
-  if (Array.isArray(obj)) return obj.map(serializeBigInts);
-  if (typeof obj === "object") {
-    return Object.fromEntries(
-      Object.entries(obj).map(([k, v]) => [k, serializeBigInts(v)])
-    );
-  }
-  return obj;
-}
+import {
+  stellarAddressSchema,
+  collaboratorSchema,
+  createSplitSchema,
+  projectIdParamSchema,
+  lockProjectSchema,
+  depositSchema,
+  updateMetadataSchema,
+  updateCollaboratorsSchema,
+  allowlistQuerySchema,
+  listProjectsSchema,
+  distributeSchema,
+  historyQuerySchema,
+  adminTokenSchema,
+  pauseDistributionsSchema,
+  isTokenAllowedQuerySchema,
+  unallocatedQuerySchema,
+  withdrawUnallocatedSchema
+} from "../schemas/splits.js";
+
+import {
+  buildHistoryTopicFilters,
+  decodeRoundHistoryEventValue,
+  decodePaymentHistoryEventValue
+} from "../services/contract-helpers.js";
+
+import {
+  serializeBigInts,
+  buildCreateProjectUnsignedXdr,
+  simulateReadOnlyContractCall,
+  listProjects,
+  fetchProjectById,
+  buildLockProjectUnsignedXdr,
+  buildDepositUnsignedXdr,
+  buildUpdateCollaboratorsUnsignedXdr,
+  buildUpdateMetadataUnsignedXdr,
+  buildPauseDistributionsUnsignedXdr,
+  buildUnpauseDistributionsUnsignedXdr,
+  buildAllowTokenUnsignedXdr,
+  buildDisallowTokenUnsignedXdr,
+  buildWithdrawUnallocatedUnsignedXdr,
+  buildUnsignedContractCall
+} from "../services/splits.service.js";
+
+// Re-export all schemas, contract helpers, and services for backwards compatibility
+export {
+  stellarAddressSchema,
+  collaboratorSchema,
+  createSplitSchema,
+  projectIdParamSchema,
+  lockProjectSchema,
+  depositSchema,
+  updateMetadataSchema,
+  updateCollaboratorsSchema,
+  allowlistQuerySchema,
+  listProjectsSchema,
+  distributeSchema,
+  historyQuerySchema,
+  adminTokenSchema,
+  pauseDistributionsSchema,
+  isTokenAllowedQuerySchema,
+  unallocatedQuerySchema,
+  withdrawUnallocatedSchema
+} from "../schemas/splits.js";
+
+export {
+  toCollaboratorScVal,
+  buildCreateProjectContractArgs,
+  buildUpdateCollaboratorsContractArgs,
+  buildLockProjectContractArgs,
+  buildDepositContractArgs,
+  buildAdminTokenContractArgs,
+  parseStellarAddress,
+  buildHistoryTopicFilters,
+  decodeRoundHistoryEventValue,
+  decodePaymentHistoryEventValue
+} from "../services/contract-helpers.js";
+
+export {
+  serializeBigInts,
+  buildUnsignedContractCall,
+  buildCreateProjectUnsignedXdr,
+  simulateReadOnlyContractCall,
+  fetchProjectsFromContract,
+  listProjects,
+  fetchProjectById,
+  buildLockProjectUnsignedXdr,
+  buildDepositUnsignedXdr,
+  buildUpdateCollaboratorsUnsignedXdr,
+  buildUpdateMetadataUnsignedXdr,
+  buildPauseDistributionsUnsignedXdr,
+  buildUnpauseDistributionsUnsignedXdr,
+  buildAllowTokenUnsignedXdr,
+  buildDisallowTokenUnsignedXdr,
+  buildWithdrawUnallocatedUnsignedXdr
+} from "../services/splits.service.js";
 
 function sendValidationError(
   res: Response,
@@ -999,10 +1078,6 @@ splitsRouter.post("/", async (req, res, next) => {
   }
 });
 
-export const distributeSchema = z.object({
-  sourceAddress: z.string().min(1, "sourceAddress is required").optional()
-});
-
 splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsedId = projectIdParamSchema.safeParse(req.params.projectId);
@@ -1124,124 +1199,6 @@ splitsRouter.get("/:projectId/claimable/:address", async (req: Request, res: Res
   }
 });
 
-const adminTokenSchema = z.object({
-  admin: stellarAddressSchema.describe("admin"),
-  token: stellarAddressSchema.describe("token")
-});
-
-interface AdminTokenRequest {
-  admin: string;
-  token: string;
-}
-
-const pauseDistributionsSchema = z.object({
-  admin: stellarAddressSchema.describe("admin")
-});
-
-interface PauseDistributionsRequest {
-  admin: string;
-}
-
-async function buildPauseDistributionsUnsignedXdr(input: PauseDistributionsRequest) {
-  const config = loadStellarConfig();
-  const server = getStellarRpcServer();
-
-  let sourceAccount;
-  try {
-    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
-  } catch {
-    throw new RequestValidationError("admin account not found on selected network");
-  }
-
-  const adminAddress = Address.fromString(input.admin);
-  const contract = new Contract(config.contractId);
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: config.networkPassphrase
-  })
-    .addOperation(contract.call("pause_distributions", adminAddress.toScVal()))
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
-  return {
-    xdr: preparedTx.toXDR(),
-    metadata: {
-      contractId: config.contractId,
-      networkPassphrase: config.networkPassphrase,
-      sourceAccount: input.admin,
-      sequenceNumber: preparedTx.sequence,
-      fee: preparedTx.fee,
-      operation: "pause_distributions"
-    }
-  };
-}
-
-async function buildUnpauseDistributionsUnsignedXdr(input: PauseDistributionsRequest) {
-  const config = loadStellarConfig();
-  const server = getStellarRpcServer();
-
-  let sourceAccount;
-  try {
-    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
-  } catch {
-    throw new RequestValidationError("admin account not found on selected network");
-  }
-
-  const adminAddress = Address.fromString(input.admin);
-  const contract = new Contract(config.contractId);
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: config.networkPassphrase
-  })
-    .addOperation(contract.call("unpause_distributions", adminAddress.toScVal()))
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
-  return {
-    xdr: preparedTx.toXDR(),
-    metadata: {
-      contractId: config.contractId,
-      networkPassphrase: config.networkPassphrase,
-      sourceAccount: input.admin,
-      sequenceNumber: preparedTx.sequence,
-      fee: preparedTx.fee,
-      operation: "unpause_distributions"
-    }
-  };
-}
-
-async function buildAllowTokenUnsignedXdr(
-  input: AdminTokenRequest
-): Promise<UnsignedTxResponse> {
-  parseStellarAddress(input.admin, "admin address");
-  parseStellarAddress(input.token, "token address");
-  const args = buildAdminTokenContractArgs(input);
-
-  return buildUnsignedContractCall({
-    sourceAddress: input.admin,
-    sourceRoleLabel: "admin",
-    operation: "allow_token",
-    args
-  });
-}
-
-async function buildDisallowTokenUnsignedXdr(
-  input: AdminTokenRequest
-): Promise<UnsignedTxResponse> {
-  parseStellarAddress(input.admin, "admin address");
-  parseStellarAddress(input.token, "token address");
-  const args = buildAdminTokenContractArgs(input);
-
-  return buildUnsignedContractCall({
-    sourceAddress: input.admin,
-    sourceRoleLabel: "admin",
-    operation: "disallow_token",
-    args
-  });
-}
-
 splitsRouter.post("/admin/allow-token", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requestId = res.locals.requestId;
@@ -1328,11 +1285,6 @@ splitsRouter.post("/admin/unpause-distributions", async (req: Request, res: Resp
   } catch (error) {
     return next(error);
   }
-});
-
-export const historyQuerySchema = z.object({
-  cursor: z.string().default(""),
-  limit: z.coerce.number().int().min(1).max(200).default(100)
 });
 
 splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next: NextFunction) => {
@@ -1460,10 +1412,6 @@ splitsRouter.get("/admin/status", async (req: Request, res: Response, next: Next
   }
 });
 
-const isTokenAllowedQuerySchema = z.object({
-  token: stellarAddressSchema.describe("token contract address to check")
-});
-
 splitsRouter.get("/admin/is-token-allowed", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requestId = res.locals.requestId;
@@ -1512,10 +1460,6 @@ splitsRouter.get("/admin/token-count", async (req: Request, res: Response, next:
 // Issue #166: Unallocated token recovery routes
 // ============================================================
 
-const unallocatedQuerySchema = z.object({
-  token: stellarAddressSchema.describe("token contract address")
-});
-
 splitsRouter.get("/admin/unallocated", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requestId = res.locals.requestId;
@@ -1541,70 +1485,6 @@ splitsRouter.get("/admin/unallocated", async (req: Request, res: Response, next:
     return next(error);
   }
 });
-
-export const withdrawUnallocatedSchema = z.object({
-  admin: stellarAddressSchema.describe("admin"),
-  token: stellarAddressSchema.describe("token contract address"),
-  to: stellarAddressSchema.describe("destination address"),
-  amount: z
-    .number()
-    .positive("amount must be greater than 0")
-    .describe("amount in stroops to recover")
-});
-
-type WithdrawUnallocatedRequest = z.infer<typeof withdrawUnallocatedSchema>;
-
-async function buildWithdrawUnallocatedUnsignedXdr(input: WithdrawUnallocatedRequest) {
-  const config = loadStellarConfig();
-  const server = getStellarRpcServer();
-
-  let sourceAccount;
-  try {
-    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
-  } catch {
-    throw new RequestValidationError("admin account not found on selected network");
-  }
-
-  const adminAddress = Address.fromString(input.admin);
-  const tokenAddress = Address.fromString(input.token);
-  const toAddress = Address.fromString(input.to);
-
-  const contract = new Contract(config.contractId);
-  const tx = new TransactionBuilder(sourceAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: config.networkPassphrase
-  })
-    .addOperation(
-      contract.call(
-        "withdraw_unallocated",
-        adminAddress.toScVal(),
-        tokenAddress.toScVal(),
-        toAddress.toScVal(),
-        nativeToScVal(input.amount, { type: "i128" })
-      )
-    )
-    .setTimeout(300)
-    .build();
-
-  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
-  return {
-    xdr: preparedTx.toXDR(),
-    metadata: {
-      contractId: config.contractId,
-      networkPassphrase: config.networkPassphrase,
-      sourceAccount: input.admin,
-      sequenceNumber: preparedTx.sequence,
-      fee: preparedTx.fee,
-      operation: "withdraw_unallocated",
-      auditContext: {
-        token: input.token,
-        destination: input.to,
-        amount: input.amount,
-        initiatedAt: new Date().toISOString()
-      }
-    }
-  };
-}
 
 splitsRouter.post("/admin/withdraw-unallocated", async (req: Request, res: Response, next: NextFunction) => {
   try {
